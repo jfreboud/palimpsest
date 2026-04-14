@@ -1,5 +1,12 @@
 .DS_Store
 
+# Memory files (private Claude identity data)
+memory/
+
+# Virtual environment
+.venv/
+uv.lock
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

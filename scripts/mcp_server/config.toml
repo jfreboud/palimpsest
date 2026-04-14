@@ -1,0 +1,3 @@
+[defaults]
+memory_dir = "../../../memory"
+layers     = ["vital", "contextual", "long"]
