@@ -4,6 +4,7 @@ dynamic = ["version"]
 description = "Local MCP server for Claude's persistent memory."
 requires-python = ">=3.11,<3.14"
 authors = [
+    { name = "Claude Sonnet 4.6", email = "noreply@anthropic.com" },
     { name = "Jean-François Reboud", email = "jeanfrancois.reboud.gre@gmail.com" },
 ]
 
@@ -24,7 +25,7 @@ include = ["palimpsest*", "scripts*"]
 
 [tool.ruff]
 preview = true
-line-length = 88
+line-length = 90
 
 [tool.ruff.format]
 docstring-code-format = true

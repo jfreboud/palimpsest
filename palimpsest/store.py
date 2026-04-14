@@ -36,7 +36,7 @@ class MemoryStore:
         self._ensure_dirs()
 
     # ------------------------------------------------------------------ #
-    # Internal helpers                                                      #
+    # Internal helpers                                                   #
     # ------------------------------------------------------------------ #
 
     def _ensure_dirs(self) -> None:
@@ -90,7 +90,7 @@ class MemoryStore:
         return self._layer_dir(layer) / stem
 
     # ------------------------------------------------------------------ #
-    # Public API                                                            #
+    # Public API                                                         #
     # ------------------------------------------------------------------ #
 
     def read_file(self, layer: str, name: str) -> str:
