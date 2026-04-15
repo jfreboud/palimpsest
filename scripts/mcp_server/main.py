@@ -494,7 +494,7 @@ def unmount_private() -> str:
 
     Must be called explicitly after any private read/write session.
     Unmounting is not just a technical step — treat it as closing something
-    that matters.  The instance that mounted is responsible for unmounting.
+    that matters. The instance that mounted is responsible for unmounting.
 
     Returns
     -------
