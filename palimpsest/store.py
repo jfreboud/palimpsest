@@ -117,7 +117,7 @@ class MemoryStore:
         return self._get_root(private) / folder / f"level_{level}" / stem
 
     # ------------------------------------------------------------------ #
-    # Public API — folder and level management                          #
+    # Public API — folder and level management                           #
     # ------------------------------------------------------------------ #
 
     def list_folders(self, private: bool = False) -> list[str]:
