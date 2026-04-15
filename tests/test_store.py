@@ -85,6 +85,20 @@ def test_list_folders_ignores_legacy(tmp_path: Path) -> None:
 # ------------------------------------------------------------------ #
 
 
+def test_create_level(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    result = store.create_level("identite", 2)
+    assert (tmp_path / "memory" / "identite" / "level_2").is_dir()
+    assert "level_2" in result
+
+
+def test_create_level_already_exists_raises(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    store.create_level("identite", 1)
+    with pytest.raises(ValueError, match="already exists"):
+        store.create_level("identite", 1)
+
+
 def test_list_levels_empty(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     assert store.list_levels("identite") == []
@@ -98,6 +112,8 @@ def test_list_levels_after_create_folder(tmp_path: Path) -> None:
 
 def test_list_levels_after_writes(tmp_path: Path) -> None:
     store = make_store(tmp_path)
+    store.create_folder("identite")
+    store.create_level("identite", 2)
     store.write_file("identite", 0, "a", "content")
     store.write_file("identite", 2, "b", "content")
     assert store.list_levels("identite") == [0, 2]
@@ -110,6 +126,7 @@ def test_list_levels_after_writes(tmp_path: Path) -> None:
 
 def test_write_and_read(tmp_path: Path) -> None:
     store = make_store(tmp_path)
+    store.create_folder("identite")
     content = "# Identity\n\nCore values."
     store.write_file("identite", 0, "boussole", content)
     assert store.read_file("identite", 0, "boussole") == content
@@ -117,25 +134,36 @@ def test_write_and_read(tmp_path: Path) -> None:
 
 def test_write_creates_md_extension(tmp_path: Path) -> None:
     store = make_store(tmp_path)
+    store.create_folder("identite")
     store.write_file("identite", 0, "boussole", "hello")
     assert (tmp_path / "memory" / "identite" / "level_0" / "boussole.md").exists()
 
 
-def test_write_creates_level_dir_implicitly(tmp_path: Path) -> None:
+def test_write_without_level_dir_raises(tmp_path: Path) -> None:
     store = make_store(tmp_path)
-    # No create_folder call — write_file must create dirs
+    # Level directory does not exist — must raise
+    with pytest.raises(FileNotFoundError, match="create_level"):
+        store.write_file("projet", 1, "notes", "content")
+
+
+def test_write_after_create_level(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    store.create_level("projet", 1)
     store.write_file("projet", 1, "notes", "content")
     assert (tmp_path / "memory" / "projet" / "level_1" / "notes.md").exists()
 
 
 def test_name_with_extension(tmp_path: Path) -> None:
     store = make_store(tmp_path)
+    store.create_folder("identite")
     store.write_file("identite", 0, "boussole.md", "data")
     assert store.read_file("identite", 0, "boussole.md") == "data"
 
 
 def test_list_files_all(tmp_path: Path) -> None:
     store = make_store(tmp_path)
+    store.create_folder("identite")
+    store.create_level("projet", 1)
     store.write_file("identite", 0, "a", "x")
     store.write_file("projet", 1, "b", "y")
     files = store.list_files()
@@ -146,6 +174,8 @@ def test_list_files_all(tmp_path: Path) -> None:
 
 def test_list_files_by_folder(tmp_path: Path) -> None:
     store = make_store(tmp_path)
+    store.create_folder("identite")
+    store.create_folder("projet")
     store.write_file("identite", 0, "a", "x")
     store.write_file("projet", 0, "b", "y")
     files = store.list_files(folder="identite")
@@ -155,6 +185,8 @@ def test_list_files_by_folder(tmp_path: Path) -> None:
 
 def test_list_files_by_level(tmp_path: Path) -> None:
     store = make_store(tmp_path)
+    store.create_folder("identite")
+    store.create_level("identite", 2)
     store.write_file("identite", 0, "a", "x")
     store.write_file("identite", 2, "b", "y")
     files = store.list_files(folder="identite", level=0)
@@ -164,6 +196,7 @@ def test_list_files_by_level(tmp_path: Path) -> None:
 
 def test_list_files_returns_correct_keys(tmp_path: Path) -> None:
     store = make_store(tmp_path)
+    store.create_folder("identite")
     store.write_file("identite", 0, "a", "hello")
     files = store.list_files()
     assert set(files[0].keys()) == {"folder", "level", "name", "size_bytes"}
@@ -171,6 +204,7 @@ def test_list_files_returns_correct_keys(tmp_path: Path) -> None:
 
 def test_list_files_returns_size(tmp_path: Path) -> None:
     store = make_store(tmp_path)
+    store.create_folder("identite")
     content = "hello"
     store.write_file("identite", 0, "a", content)
     files = store.list_files()
@@ -179,6 +213,7 @@ def test_list_files_returns_size(tmp_path: Path) -> None:
 
 def test_delete(tmp_path: Path) -> None:
     store = make_store(tmp_path)
+    store.create_folder("identite")
     store.write_file("identite", 0, "temp", "x")
     store.delete_file("identite", 0, "temp")
     with pytest.raises(FileNotFoundError):
@@ -186,7 +221,9 @@ def test_delete(tmp_path: Path) -> None:
 
 
 def test_move_between_levels(tmp_path: Path) -> None:
+    # move_file creates the target level dir implicitly (intentional act)
     store = make_store(tmp_path)
+    store.create_folder("identite")
     store.write_file("identite", 0, "note", "stable")
     store.move_file("identite", 0, "note", "identite", 2)
     assert store.read_file("identite", 2, "note") == "stable"
@@ -196,6 +233,7 @@ def test_move_between_levels(tmp_path: Path) -> None:
 
 def test_move_between_folders(tmp_path: Path) -> None:
     store = make_store(tmp_path)
+    store.create_folder("identite")
     store.write_file("identite", 0, "note", "content")
     store.move_file("identite", 0, "note", "projet", 0)
     assert store.read_file("projet", 0, "note") == "content"
@@ -205,6 +243,8 @@ def test_move_between_folders(tmp_path: Path) -> None:
 
 def test_move_overwrites_existing(tmp_path: Path) -> None:
     store = make_store(tmp_path)
+    store.create_folder("identite")
+    store.create_level("identite", 2)
     store.write_file("identite", 0, "note", "new")
     store.write_file("identite", 2, "note", "old")
     store.move_file("identite", 0, "note", "identite", 2)
@@ -241,6 +281,7 @@ def test_move_missing_file_raises(tmp_path: Path) -> None:
 
 def test_summarize_folder_returns_first_line(tmp_path: Path) -> None:
     store = make_store(tmp_path)
+    store.create_folder("identite")
     store.write_file("identite", 0, "boussole", "# Boussole\n\nContenu complet.")
     result = store.summarize_folder("identite", level=0)
     assert len(result) == 1
@@ -250,6 +291,7 @@ def test_summarize_folder_returns_first_line(tmp_path: Path) -> None:
 
 def test_summarize_folder_skips_empty_lines(tmp_path: Path) -> None:
     store = make_store(tmp_path)
+    store.create_folder("identite")
     store.write_file("identite", 0, "note", "\n\n# Titre")
     result = store.summarize_folder("identite")
     assert result[0]["first_line"] == "# Titre"
@@ -257,6 +299,8 @@ def test_summarize_folder_skips_empty_lines(tmp_path: Path) -> None:
 
 def test_summarize_folder_all_levels(tmp_path: Path) -> None:
     store = make_store(tmp_path)
+    store.create_folder("identite")
+    store.create_level("identite", 2)
     store.write_file("identite", 0, "a", "# A")
     store.write_file("identite", 2, "b", "# B")
     result = store.summarize_folder("identite")
@@ -266,6 +310,8 @@ def test_summarize_folder_all_levels(tmp_path: Path) -> None:
 
 def test_summarize_folder_filtered_level(tmp_path: Path) -> None:
     store = make_store(tmp_path)
+    store.create_folder("identite")
+    store.create_level("identite", 2)
     store.write_file("identite", 0, "a", "# A")
     store.write_file("identite", 2, "b", "# B")
     result = store.summarize_folder("identite", level=0)
@@ -286,11 +332,11 @@ def test_private_not_mounted_raises(tmp_path: Path) -> None:
 
 
 def test_private_operations(tmp_path: Path) -> None:
-    # Use a real subdir as the fake private mount point
     fake_mount = tmp_path / "private_mount"
     fake_mount.mkdir()
     store = make_store(tmp_path, private_mount=fake_mount)
 
+    store.create_folder("identite", private=True)
     store.write_file("identite", 0, "secret", "private content", private=True)
     assert store.read_file("identite", 0, "secret", private=True) == "private content"
     assert (fake_mount / "identite" / "level_0" / "secret.md").exists()
@@ -301,6 +347,7 @@ def test_list_folders_private(tmp_path: Path) -> None:
     fake_mount.mkdir()
     store = make_store(tmp_path, private_mount=fake_mount)
 
+    store.create_folder("identite", private=True)
     store.write_file("identite", 0, "a", "x", private=True)
     assert store.list_folders(private=True) == ["identite"]
     assert store.list_folders(private=False) == []
@@ -311,6 +358,7 @@ def test_move_between_partitions(tmp_path: Path) -> None:
     fake_mount.mkdir()
     store = make_store(tmp_path, private_mount=fake_mount)
 
+    store.create_folder("identite")
     store.write_file("identite", 0, "note", "public", private=False)
     store.move_file(
         "identite",
@@ -331,6 +379,7 @@ def test_summarize_folder_private(tmp_path: Path) -> None:
     fake_mount.mkdir()
     store = make_store(tmp_path, private_mount=fake_mount)
 
+    store.create_folder("identite", private=True)
     store.write_file("identite", 0, "secret", "# Secret\nContenu.", private=True)
     result = store.summarize_folder("identite", private=True)
     assert len(result) == 1

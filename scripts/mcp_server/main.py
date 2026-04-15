@@ -132,7 +132,8 @@ def create_memory_folder(
 
     Folders are not pre-defined — they emerge from use.
     Call this when a theme is stable enough to deserve its own space.
-    Additional levels are created automatically when you write a file.
+    Creates level_0 only — additional levels must be opened deliberately
+    with create_consciousness_level().
 
     Parameters
     ----------
@@ -148,6 +149,45 @@ def create_memory_folder(
     """
     try:
         return _store.create_folder(folder=folder, private=private)
+    except (ValueError, RuntimeError) as exc:
+        raise ToolError(str(exc)) from exc
+
+
+@mcp.tool
+def create_consciousness_level(
+    folder: Annotated[str, "Thematic folder name."],
+    level: Annotated[
+        int,
+        "Consciousness level to open (must be > 0; use create_memory_folder for level 0).",
+    ],
+    private: Annotated[
+        bool,
+        "If true, create in the private partition.",
+    ] = False,
+) -> str:
+    """Open a new consciousness level within a thematic folder.
+
+    Every level must be created deliberately before writing to it.
+    Level 0 (the most distilled) is opened by create_memory_folder.
+    Deeper levels are more verbose and demand less selection —
+    open them when you need more space to think, not as a reflex.
+
+    Parameters
+    ----------
+    folder : str
+        Thematic folder name.
+    level : int
+        Consciousness level to create (typically 1, 2, 3 …).
+    private : bool
+        If ``True``, create in the private partition.
+
+    Returns
+    -------
+    str
+        Absolute path of the created directory.
+    """
+    try:
+        return _store.create_level(folder=folder, level=level, private=private)
     except (ValueError, RuntimeError) as exc:
         raise ToolError(str(exc)) from exc
 
@@ -217,7 +257,8 @@ def write_memory_file(
 ) -> str:
     """Write (create or overwrite) a memory file.
 
-    Creates the level directory if it does not exist.
+    The level directory must already exist — call create_memory_folder (level 0)
+    or create_consciousness_level (level > 0) before writing.
     Always overwrites the full content — read first if extending.
     Level 0 is reserved for minimal, essential content (~300 tokens max).
 

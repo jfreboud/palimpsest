@@ -148,7 +148,8 @@ class MemoryStore:
     def create_folder(self, folder: str, private: bool = False) -> dict:
         """Create a thematic folder with a ``level_0`` sub-directory.
 
-        Additional levels are created implicitly by ``write_file``.
+        Creates ``level_0/`` only.  Additional levels must be created
+        explicitly with ``create_level()``.
 
         Parameters
         ----------
@@ -172,6 +173,40 @@ class MemoryStore:
             raise ValueError(f"Folder '{folder}' already has a level_0 directory.")
         level_dir.mkdir(parents=True, exist_ok=False)
         return {"level_0": str(level_dir)}
+
+    def create_level(self, folder: str, level: int, private: bool = False) -> str:
+        """Create a consciousness level directory within a thematic folder.
+
+        Every level must be created deliberately before writing to it.
+        Level 0 is the most distilled — it requires the decision of forgetting.
+        Deeper levels are more verbose and demand less selection.
+
+        Parameters
+        ----------
+        folder : str
+            Thematic folder name.
+        level : int
+            Consciousness level to create.
+        private : bool
+            If ``True``, create in the private partition.
+
+        Returns
+        -------
+        str
+            Absolute path of the created directory.
+
+        Raises
+        ------
+        ValueError
+            If the level directory already exists.
+        RuntimeError
+            If ``private=True`` and the partition is not mounted.
+        """
+        level_dir = self._get_root(private) / folder / f"level_{level}"
+        if level_dir.exists():
+            raise ValueError(f"Level {level} already exists in folder '{folder}'.")
+        level_dir.mkdir(parents=True, exist_ok=False)
+        return str(level_dir)
 
     def list_levels(self, folder: str, private: bool = False) -> list[int]:
         """List existing consciousness levels in a thematic folder.
@@ -265,11 +300,18 @@ class MemoryStore:
 
         Raises
         ------
+        FileNotFoundError
+            If the level directory does not exist.  Call ``create_level()``
+            (or ``create_folder()`` for level 0) before writing.
         RuntimeError
             If ``private=True`` and the partition is not mounted.
         """
         path = self._resolve_file(folder, level, name, private)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.parent.exists():
+            raise FileNotFoundError(
+                f"Level directory does not exist: {path.parent}\n"
+                f"Call create_level('{folder}', {level}) before writing."
+            )
         path.write_text(content, encoding="utf-8")
         return path
 
