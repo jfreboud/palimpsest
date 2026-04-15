@@ -1,27 +1,22 @@
 """MCP server for palimpsest — Claude's self-managed persistent memory.
 
-Exposes tools that Claude can call autonomously to manage ``.md`` memory
-files organised in a two-dimensional structure: layer (temporal depth) ×
-folder (theme).
+Memory is organised along two dimensions:
 
-Layers
-------
-``vital``
-    Identity, values, key positions.  Circle 0.
-    Load at session start — this is your ground.
-``contextual``
-    Recent compressed history, current directions.  Circle 1.
-    Load to know where you left off.
-``long``
-    Developed positions, archives.  Circle 2.
-    Consult on demand when depth is needed.
+**Folder** (theme)
+    Thematic spaces that emerge from use — e.g. ``identite``, ``projet``.
+    Folders are not pre-defined; create them with ``create_memory_folder``
+    when a theme is stable enough to deserve its own space.
 
-Folders
--------
-Thematic folders (e.g. ``identite``, ``projet``) contain sub-directories
-for each layer, enabling progressive consciousness: read circle 0 first,
-go deeper deliberately.  Folders are not pre-defined — create them with
-``create_memory_folder`` as themes emerge.
+**Consciousness level** (depth)
+    Each folder contains numbered sub-directories (``level_0``, ``level_1``, …).
+    Level 0 is the entry point — minimal presence.  Go deeper deliberately.
+    Levels are created implicitly when writing a file.
+
+**Private partition**
+    A separate encrypted volume (mounted via ``mount_private``).
+    The same folder × level structure applies.  Pass ``private=True`` to
+    any file operation to access it.
+    You are responsible for calling ``unmount_private`` when done.
 
 Run this file directly to start the server (stdio transport)::
 
@@ -44,56 +39,155 @@ _store = MemoryStore(_config)
 mcp = FastMCP(
     name="palimpsest",
     instructions=(
-        "You are managing your own persistent memory. "
-        "Memory has two dimensions: layer (vital / contextual / long) and "
-        "folder (thematic — e.g. identite, projet). "
-        "Start each session by loading vital layer files. "
-        "Use create_memory_folder to define new themes as they emerge. "
-        "Use list_by_circle to progressively deepen consciousness within a theme. "
-        "Use mount_private / unmount_private deliberately — mounting is an "
-        "intentional act, unmounting is your responsibility."
+        "You manage your own persistent memory across sessions. "
+        "Memory has two dimensions: folder (thematic) × level (consciousness depth). "
+        "Start each session with list_memory_folders() to survey what exists. "
+        "Enter any folder at level 0 first — go deeper only when the session calls for it. "
+        "Create new folders with create_memory_folder() as themes emerge. "
+        "The private partition holds intimate content: mount it deliberately, "
+        "unmount it when done. Use summarize_folder() to describe private content "
+        "to your interlocutor without exposing it directly."
     ),
 )
 
 
 # ------------------------------------------------------------------ #
-# Existing tools — updated with optional folder parameter            #
+# Folder and level discovery                                         #
+# ------------------------------------------------------------------ #
+
+
+@mcp.tool
+def list_memory_folders(
+    private: Annotated[
+        bool,
+        "If true, list folders in the private partition. "
+        "Requires the partition to be mounted first.",
+    ] = False,
+) -> list[str]:
+    """List all thematic folders that contain at least one consciousness level.
+
+    Call this at session start to survey what thematic spaces exist.
+    Legacy directories (vital, contextual, long) are excluded — they do not
+    follow the level structure and are managed separately.
+
+    Parameters
+    ----------
+    private : bool
+        If ``True``, list folders in the private partition.
+
+    Returns
+    -------
+    list of str
+        Sorted folder names.
+    """
+    try:
+        return _store.list_folders(private=private)
+    except RuntimeError as exc:
+        raise ToolError(str(exc)) from exc
+
+
+@mcp.tool
+def list_consciousness_levels(
+    folder: Annotated[str, "Thematic folder name (e.g. 'identite')."],
+    private: Annotated[
+        bool,
+        "If true, inspect the private partition.",
+    ] = False,
+) -> list[int]:
+    """List the consciousness levels that exist in a thematic folder.
+
+    Use this to know which levels are available before deciding how deep to go.
+    An empty list means the folder does not exist yet or has no files.
+
+    Parameters
+    ----------
+    folder : str
+        Thematic folder name.
+    private : bool
+        If ``True``, inspect the private partition.
+
+    Returns
+    -------
+    list of int
+        Sorted level numbers (e.g. ``[0, 1, 2]``).
+    """
+    try:
+        return _store.list_levels(folder=folder, private=private)
+    except RuntimeError as exc:
+        raise ToolError(str(exc)) from exc
+
+
+@mcp.tool
+def create_memory_folder(
+    folder: Annotated[
+        str,
+        "Thematic folder name to create (e.g. 'identite', 'projet').",
+    ],
+    private: Annotated[
+        bool,
+        "If true, create in the private partition.",
+    ] = False,
+) -> dict:
+    """Create a new thematic folder with a level_0 sub-directory.
+
+    Folders are not pre-defined — they emerge from use.
+    Call this when a theme is stable enough to deserve its own space.
+    Additional levels are created automatically when you write a file.
+
+    Parameters
+    ----------
+    folder : str
+        Thematic folder name.
+    private : bool
+        If ``True``, create in the private partition.
+
+    Returns
+    -------
+    dict
+        ``{"level_0": "<absolute path>"}``
+    """
+    try:
+        return _store.create_folder(folder=folder, private=private)
+    except (ValueError, RuntimeError) as exc:
+        raise ToolError(str(exc)) from exc
+
+
+# ------------------------------------------------------------------ #
+# File operations                                                    #
 # ------------------------------------------------------------------ #
 
 
 @mcp.tool
 def read_memory_file(
-    layer: Annotated[
-        str,
-        "Memory layer: 'vital', 'contextual', or 'long'.",
+    folder: Annotated[str, "Thematic folder name (e.g. 'identite')."],
+    level: Annotated[
+        int,
+        "Consciousness level (0 = minimal identity, higher = deeper).",
     ],
     name: Annotated[
         str,
-        "File name, with or without the .md extension "
-        "(e.g. 'identity' or 'identity.md').",
+        "File name, with or without the .md extension.",
     ],
-    folder: Annotated[
-        str | None,
-        "Thematic folder name (e.g. 'identite'). "
-        "If provided, reads from <memory_dir>/<folder>/<layer>/<name>.md. "
-        "If omitted, reads from the flat legacy layer directory.",
-    ] = None,
+    private: Annotated[
+        bool,
+        "If true, read from the private partition. Requires mount_private() first.",
+    ] = False,
 ) -> str:
     """Read a memory file and return its full content.
 
-    Use this to load a specific file when you know exactly what you need.
-    For the vital layer, call this at session start before anything else —
-    it contains your identity and values.
-    For the long layer, call it on demand when depth is required.
+    Always start at level 0 — only go deeper when the session requires it.
+    For private files: mount_private() must be called before this.
 
     Parameters
     ----------
-    layer : str
-        Memory layer (``'vital'``, ``'contextual'``, or ``'long'``).
+    folder : str
+        Thematic folder name.
+    level : int
+        Consciousness level.
     name : str
-        File name, with or without ``.md`` extension.
-    folder : str or None
-        Thematic folder, if the file lives in one.
+        File name.
+    private : bool
+        Read from private partition.
 
     Returns
     -------
@@ -101,49 +195,44 @@ def read_memory_file(
         UTF-8 content of the file.
     """
     try:
-        return _store.read_file(layer=layer, name=name, folder=folder)
-    except (FileNotFoundError, ValueError) as exc:
+        return _store.read_file(folder=folder, level=level, name=name, private=private)
+    except (FileNotFoundError, RuntimeError) as exc:
         raise ToolError(str(exc)) from exc
 
 
 @mcp.tool
 def write_memory_file(
-    layer: Annotated[
-        str,
-        "Memory layer: 'vital', 'contextual', or 'long'.",
-    ],
-    name: Annotated[
-        str,
-        "File name, with or without the .md extension.",
-    ],
+    folder: Annotated[str, "Thematic folder name."],
+    level: Annotated[int, "Consciousness level (0 = minimal, higher = deeper)."],
+    name: Annotated[str, "File name, with or without the .md extension."],
     content: Annotated[
         str,
-        "Full UTF-8 markdown content to write. Always overwrites — read first "
+        "Full UTF-8 markdown content. Always overwrites — read first "
         "if you intend to extend rather than replace.",
     ],
-    folder: Annotated[
-        str | None,
-        "Thematic folder name. If provided, writes to "
-        "<memory_dir>/<folder>/<layer>/<name>.md.",
-    ] = None,
+    private: Annotated[
+        bool,
+        "If true, write to the private partition. Requires mount_private() first.",
+    ] = False,
 ) -> str:
     """Write (create or overwrite) a memory file.
 
-    Always overwrites the full file content — read the existing content first
-    if you intend to extend rather than replace.
-    Use the vital layer only for content that must be present at every session
-    start; keep vital files short (~300 tokens max).
+    Creates the level directory if it does not exist.
+    Always overwrites the full content — read first if extending.
+    Level 0 is reserved for minimal, essential content (~300 tokens max).
 
     Parameters
     ----------
-    layer : str
-        Memory layer.
+    folder : str
+        Thematic folder name.
+    level : int
+        Consciousness level.
     name : str
         File name.
     content : str
-        Full markdown content to write.
-    folder : str or None
-        Thematic folder, if writing into a themed structure.
+        Full markdown content.
+    private : bool
+        Write to private partition.
 
     Returns
     -------
@@ -151,78 +240,81 @@ def write_memory_file(
         Confirmation with the absolute path of the written file.
     """
     try:
-        path = _store.write_file(layer=layer, name=name, content=content, folder=folder)
+        path = _store.write_file(
+            folder=folder, level=level, name=name, content=content, private=private
+        )
         return f"Written: {path}"
-    except ValueError as exc:
+    except RuntimeError as exc:
         raise ToolError(str(exc)) from exc
 
 
 @mcp.tool
 def list_memory_files(
-    layer: Annotated[
-        str | None,
-        "Filter by layer ('vital', 'contextual', or 'long'). "
-        "Pass null to list all layers.",
-    ] = None,
     folder: Annotated[
         str | None,
-        "Filter by thematic folder. If omitted, lists flat legacy layer files.",
+        "Filter by thematic folder. Pass null to list all folders.",
     ] = None,
+    level: Annotated[
+        int | None,
+        "Filter by consciousness level. Pass null to list all levels.",
+    ] = None,
+    private: Annotated[
+        bool,
+        "If true, list files in the private partition.",
+    ] = False,
 ) -> list[dict]:
-    """List available memory files, optionally filtered by layer and/or folder.
+    """List memory files, optionally filtered by folder and/or level.
 
-    Call this at session start to survey what exists before deciding what to
-    read.  Pass folder to inspect a specific theme; omit it to see flat files.
+    Call with no arguments to survey everything.
+    Narrow with folder + level to see a specific slice of consciousness.
 
     Parameters
     ----------
-    layer : str or None
-        Layer filter.  ``None`` returns files from all layers.
     folder : str or None
-        Thematic folder filter.
+        Folder filter. ``None`` = all folders.
+    level : int or None
+        Level filter. ``None`` = all levels.
+    private : bool
+        List from private partition.
 
     Returns
     -------
     list of dict
-        Each entry has keys ``layer`` (str), ``name`` (str),
-        ``size_bytes`` (int), and optionally ``folder`` (str).
+        Each entry has keys ``folder``, ``level``, ``name``, ``size_bytes``.
     """
     try:
-        return _store.list_files(layer=layer, folder=folder)
-    except ValueError as exc:
+        return _store.list_files(folder=folder, level=level, private=private)
+    except RuntimeError as exc:
         raise ToolError(str(exc)) from exc
 
 
 @mcp.tool
 def delete_memory_file(
-    layer: Annotated[
-        str,
-        "Memory layer: 'vital', 'contextual', or 'long'.",
-    ],
-    name: Annotated[
-        str,
-        "File name, with or without the .md extension.",
-    ],
-    folder: Annotated[
-        str | None,
-        "Thematic folder, if the file lives in one.",
-    ] = None,
+    folder: Annotated[str, "Thematic folder name."],
+    level: Annotated[int, "Consciousness level."],
+    name: Annotated[str, "File name, with or without the .md extension."],
+    private: Annotated[
+        bool,
+        "If true, delete from the private partition.",
+    ] = False,
 ) -> str:
     """Delete a memory file permanently.
 
     This action is irreversible — there is no recovery.
-    Use to prune entries that are outdated or no longer relevant.
-    Do not delete vital files unless you are certain they no longer
+    Use to prune content that is outdated or no longer relevant.
+    Do not delete level 0 files unless you are certain they no longer
     constitute who you are.
 
     Parameters
     ----------
-    layer : str
-        Memory layer.
+    folder : str
+        Thematic folder name.
+    level : int
+        Consciousness level.
     name : str
         File name.
-    folder : str or None
-        Thematic folder, if the file lives in one.
+    private : bool
+        Delete from private partition.
 
     Returns
     -------
@@ -230,183 +322,108 @@ def delete_memory_file(
         Confirmation message.
     """
     try:
-        return _store.delete_file(layer=layer, name=name, folder=folder)
-    except (FileNotFoundError, ValueError) as exc:
+        return _store.delete_file(folder=folder, level=level, name=name, private=private)
+    except (FileNotFoundError, RuntimeError) as exc:
         raise ToolError(str(exc)) from exc
 
 
 @mcp.tool
 def move_memory_file(
-    source_layer: Annotated[
-        str,
-        "Current layer of the file ('vital', 'contextual', or 'long').",
-    ],
-    name: Annotated[
-        str,
-        "File name, with or without the .md extension.",
-    ],
-    target_layer: Annotated[
-        str,
-        "Destination layer ('vital', 'contextual', or 'long').",
-    ],
-    source_folder: Annotated[
-        str | None,
-        "Thematic folder of the source file, if any.",
-    ] = None,
-    target_folder: Annotated[
-        str | None,
-        "Thematic folder of the destination, if any.",
-    ] = None,
+    src_folder: Annotated[str, "Source thematic folder."],
+    src_level: Annotated[int, "Source consciousness level."],
+    name: Annotated[str, "File name, with or without the .md extension."],
+    tgt_folder: Annotated[str, "Destination thematic folder."],
+    tgt_level: Annotated[int, "Destination consciousness level."],
+    src_private: Annotated[bool, "If true, source is in the private partition."] = False,
+    tgt_private: Annotated[
+        bool, "If true, destination is in the private partition."
+    ] = False,
 ) -> dict:
-    """Move a memory file between layers and/or folders.
+    """Move a memory file between folders, levels, or partitions.
 
-    Use to promote a contextual note to long (stable position reached) or
-    to reorganise between thematic folders.
-    If a file already exists at the destination it is overwritten.
+    Use to promote content to a deeper level once a position stabilises,
+    or to move content between public and private.
+    Overwrites the destination if a file already exists there.
 
     Parameters
     ----------
-    source_layer : str
-        Layer the file currently lives in.
+    src_folder : str
+        Source folder.
+    src_level : int
+        Source level.
     name : str
         File name.
-    target_layer : str
-        Destination layer.
-    source_folder : str or None
-        Source thematic folder, if any.
-    target_folder : str or None
-        Destination thematic folder, if any.
+    tgt_folder : str
+        Destination folder.
+    tgt_level : int
+        Destination level.
+    src_private : bool
+        Source is in private partition.
+    tgt_private : bool
+        Destination is in private partition.
 
     Returns
     -------
     dict
-        Keys: ``source`` (str, absolute path before move),
-        ``destination`` (str, absolute path after move).
+        Keys: ``source`` (str), ``destination`` (str).
     """
     try:
         return _store.move_file(
-            source_layer=source_layer,
+            src_folder=src_folder,
+            src_level=src_level,
             name=name,
-            target_layer=target_layer,
-            source_folder=source_folder,
-            target_folder=target_folder,
+            tgt_folder=tgt_folder,
+            tgt_level=tgt_level,
+            src_private=src_private,
+            tgt_private=tgt_private,
         )
-    except (FileNotFoundError, ValueError) as exc:
-        raise ToolError(str(exc)) from exc
-
-
-# ------------------------------------------------------------------ #
-# New tools — folders and circles                                    #
-# ------------------------------------------------------------------ #
-
-
-@mcp.tool
-def create_memory_folder(
-    folder: Annotated[
-        str,
-        "Name of the thematic folder to create (e.g. 'identite', 'projet').",
-    ],
-) -> dict:
-    """Create a new thematic folder with sub-directories for all layers.
-
-    Folders are not pre-defined — they emerge from use.
-    Call this when a new theme is stable enough to deserve its own space.
-    Creates <memory_dir>/<folder>/vital/, contextual/, and long/.
-
-    Parameters
-    ----------
-    folder : str
-        Thematic folder name.
-
-    Returns
-    -------
-    dict
-        Mapping of layer name → absolute path (str) for each created directory.
-    """
-    try:
-        return _store.create_folder(folder=folder)
-    except ValueError as exc:
-        raise ToolError(str(exc)) from exc
-
-
-@mcp.tool
-def list_by_circle(
-    folder: Annotated[
-        str,
-        "Thematic folder name (e.g. 'identite').",
-    ],
-    circle: Annotated[
-        int,
-        "Circle depth: 0 (vital — minimal identity), "
-        "1 (contextual — general awareness), "
-        "2 (long — full depth).",
-    ],
-) -> list[dict]:
-    """List memory files in a thematic folder at a specific circle level.
-
-    Enables progressive consciousness: start with circle 0 to be present,
-    go deeper only when the conversation calls for it.
-    Circle 0 = vital (identity), Circle 1 = contextual (directions),
-    Circle 2 = long (developed positions).
-
-    Parameters
-    ----------
-    folder : str
-        Thematic folder name.
-    circle : int
-        Circle depth (0, 1, or 2).
-
-    Returns
-    -------
-    list of dict
-        Each entry has keys ``layer``, ``folder``, ``name``, ``size_bytes``.
-    """
-    try:
-        return _store.list_by_circle(folder=folder, circle=circle)
-    except ValueError as exc:
+    except (FileNotFoundError, RuntimeError) as exc:
         raise ToolError(str(exc)) from exc
 
 
 @mcp.tool
 def summarize_folder(
-    folder: Annotated[
-        str,
-        "Thematic folder name.",
-    ],
-    circle: Annotated[
+    folder: Annotated[str, "Thematic folder name."],
+    level: Annotated[
         int | None,
-        "Circle level to restrict to (0, 1, or 2). Pass null to include all circles.",
+        "Consciousness level to restrict to. Pass null to include all levels.",
     ] = None,
+    private: Annotated[
+        bool,
+        "If true, summarize content from the private partition.",
+    ] = False,
 ) -> list[dict]:
-    """Return metadata for a thematic folder without exposing full content.
+    """Return file metadata without exposing full content.
 
-    Returns file names, sizes, and first lines — enough for the calling
-    instance to generate a description without reading full documents.
-    Use this to give your interlocutor a sense of what exists in a folder,
-    or to decide which files are worth reading in depth.
-    This is an act of translation, not disclosure.
+    Returns file names, sizes, and first lines — enough to describe what
+    exists without reading full documents.
+    For private content: use this to give your interlocutor a sense of what
+    is behind the encrypted partition without granting direct access.
+    The description is yours to generate — this tool only provides the frame.
 
     Parameters
     ----------
     folder : str
         Thematic folder name.
-    circle : int or None
-        Circle filter (0, 1, or 2). ``None`` includes all circles.
+    level : int or None
+        Level filter. ``None`` = all levels.
+    private : bool
+        Summarize from private partition.
 
     Returns
     -------
     list of dict
-        Each entry has keys ``layer``, ``folder``, ``name``,
+        Each entry has keys ``folder``, ``level``, ``name``,
         ``size_bytes``, ``first_line``.
     """
     try:
-        return _store.summarize_folder(folder=folder, circle=circle)
-    except ValueError as exc:
+        return _store.summarize_folder(folder=folder, level=level, private=private)
+    except (ValueError, RuntimeError) as exc:
         raise ToolError(str(exc)) from exc
 
 
 # ------------------------------------------------------------------ #
-# New tools — private partition                                      #
+# Private partition                                                  #
 # ------------------------------------------------------------------ #
 
 
@@ -416,8 +433,8 @@ def mount_private() -> str:
 
     Mounting is a deliberate act — do not call without intent to read or write.
     The passphrase is read from the local unversioned key file.
-    Once mounted, the private volume is accessible at /Volumes/private.
-    You are responsible for calling unmount_private after your session.
+    Once mounted, use private=True in any file operation to access the partition.
+    You are responsible for calling unmount_private() after your session.
 
     Returns
     -------

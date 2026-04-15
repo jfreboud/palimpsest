@@ -6,27 +6,32 @@ directly from tests without importing any MCP machinery.
 File layout
 -----------
 ``<memory_dir>/``
-    ``vital/``        — flat files, always-loaded identity layer (legacy/unthemed)
-    ``contextual/``   — flat files, recent compressed history (legacy/unthemed)
-    ``long/``         — flat files, developed positions, archives (legacy/unthemed)
-    ``<folder>/``     — thematic folder
-        ``vital/``    — circle 0 files for this theme
-        ``contextual/`` — circle 1 files for this theme
-        ``long/``     — circle 2 files for this theme
+    ``<folder>/``           — thematic folder (e.g. ``identite``, ``projet``)
+        ``level_0/``        — consciousness level 0 (minimal identity)
+        ``level_1/``        — consciousness level 1 (general awareness)
+        ``level_2/``        — consciousness level 2 (full depth)
+        ...
 
-Two-dimensional structure
--------------------------
-Files can be addressed by layer alone (legacy flat structure) or by folder + layer
-(thematic structure). Folders are not pre-defined — they emerge from use via
-``create_folder()``.
+Legacy directories (``vital/``, ``contextual/``, ``long/``) are left untouched
+and are not managed by this store.
 
-Circle mapping
---------------
-Circle 0 → ``vital``, Circle 1 → ``contextual``, Circle 2 → ``long``
+The same structure applies to the private partition once mounted::
+
+    ``/Volumes/private/``
+        ``<folder>/``
+            ``level_0/``
+            ...
+
+Two-dimensional addressing
+--------------------------
+Every file is addressed by ``(folder, level, name)`` plus an optional
+``private`` flag.  Folders and levels are created dynamically — nothing
+is hardcoded.
 """
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -34,7 +39,7 @@ from pathlib import Path
 from palimpsest.config import Config
 
 _MD_SUFFIX = ".md"
-_CIRCLE_TO_LAYER = {0: "vital", 1: "contextual", 2: "long"}
+_LEVEL_RE = re.compile(r"^level_(\d+)$")
 
 
 class MemoryStore:
@@ -43,56 +48,50 @@ class MemoryStore:
     Parameters
     ----------
     config : Config
-        Resolved configuration (``memory_dir``, ``layers``, ``dmg_path``,
-        ``private_key``).
+        Resolved configuration (``memory_dir``, ``dmg_path``,
+        ``private_key``, ``private_mount``).
     """
 
     def __init__(self, config: Config) -> None:
         self._root = config.memory_dir
-        self._layers = config.layers
         self._dmg_path = config.dmg_path
         self._private_key = config.private_key
-        self._ensure_dirs()
+        self._private_mount = config.private_mount
 
     # ------------------------------------------------------------------ #
     # Internal helpers                                                   #
     # ------------------------------------------------------------------ #
 
-    def _ensure_dirs(self) -> None:
-        """Create flat layer sub-directories if they do not exist."""
-        for layer in self._layers:
-            (self._root / layer).mkdir(parents=True, exist_ok=True)
-
-    def _layer_dir(self, layer: str, folder: str | None = None) -> Path:
-        """Return the absolute path for a layer, optionally scoped to a folder.
+    def _get_root(self, private: bool = False) -> Path:
+        """Return the filesystem root for the given partition.
 
         Parameters
         ----------
-        layer : str
-            One of the configured layer names.
-        folder : str or None
-            Thematic folder name. If provided, returns
-            ``<memory_dir>/<folder>/<layer>/``.
+        private : bool
+            If ``True``, return the private partition mount point.
 
         Returns
         -------
         Path
-            Absolute directory path.
+            Absolute root directory.
 
         Raises
         ------
-        ValueError
-            If ``layer`` is not a known layer name.
+        RuntimeError
+            If ``private=True`` and the partition is not mounted.
         """
-        if layer not in self._layers:
-            raise ValueError(
-                f"Unknown layer '{layer}'. Valid layers: {list(self._layers)}"
-            )
-        if folder:
-            return self._root / folder / layer
-        return self._root / layer
+        if private:
+            if not self._private_mount.exists():
+                raise RuntimeError(
+                    f"Private partition is not mounted at {self._private_mount}. "
+                    "Call mount_private() first."
+                )
+            return self._private_mount
+        return self._root
 
-    def _resolve_file(self, layer: str, name: str, folder: str | None = None) -> Path:
+    def _resolve_file(
+        self, folder: str, level: int, name: str, private: bool = False
+    ) -> Path:
         """Build the absolute path for a memory file.
 
         Appends ``.md`` if the name does not already end with it.
@@ -100,13 +99,14 @@ class MemoryStore:
 
         Parameters
         ----------
-        layer : str
-            Target layer name.
+        folder : str
+            Thematic folder name.
+        level : int
+            Consciousness level (0 = minimal).
         name : str
             File name, with or without ``.md`` extension.
-        folder : str or None
-            If provided, resolves to ``<memory_dir>/<folder>/<layer>/<name>.md``.
-            Otherwise resolves to ``<memory_dir>/<layer>/<name>.md``.
+        private : bool
+            If ``True``, resolve within the private partition.
 
         Returns
         -------
@@ -114,24 +114,107 @@ class MemoryStore:
             Absolute path to the ``.md`` file.
         """
         stem = name if name.endswith(_MD_SUFFIX) else f"{name}{_MD_SUFFIX}"
-        return self._layer_dir(layer, folder) / stem
+        return self._get_root(private) / folder / f"level_{level}" / stem
 
     # ------------------------------------------------------------------ #
-    # Public API — file operations                                       #
+    # Public API — folder and level management                          #
     # ------------------------------------------------------------------ #
 
-    def read_file(self, layer: str, name: str, folder: str | None = None) -> str:
+    def list_folders(self, private: bool = False) -> list[str]:
+        """List thematic folders that contain at least one level directory.
+
+        Legacy directories (``vital``, ``contextual``, ``long``) that do not
+        contain ``level_N`` sub-directories are excluded.
+
+        Parameters
+        ----------
+        private : bool
+            If ``True``, list folders in the private partition.
+
+        Returns
+        -------
+        list of str
+            Sorted folder names.
+        """
+        root = self._get_root(private)
+        result = []
+        for d in sorted(root.iterdir()):
+            if d.is_dir() and any(
+                _LEVEL_RE.match(sub.name) for sub in d.iterdir() if sub.is_dir()
+            ):
+                result.append(d.name)
+        return result
+
+    def create_folder(self, folder: str, private: bool = False) -> dict:
+        """Create a thematic folder with a ``level_0`` sub-directory.
+
+        Additional levels are created implicitly by ``write_file``.
+
+        Parameters
+        ----------
+        folder : str
+            Thematic folder name (e.g. ``"identite"``).
+        private : bool
+            If ``True``, create in the private partition.
+
+        Returns
+        -------
+        dict
+            ``{"level_0": "<absolute path>"}``
+
+        Raises
+        ------
+        ValueError
+            If the folder already has a ``level_0`` directory.
+        """
+        level_dir = self._get_root(private) / folder / "level_0"
+        if level_dir.exists():
+            raise ValueError(f"Folder '{folder}' already has a level_0 directory.")
+        level_dir.mkdir(parents=True, exist_ok=False)
+        return {"level_0": str(level_dir)}
+
+    def list_levels(self, folder: str, private: bool = False) -> list[int]:
+        """List existing consciousness levels in a thematic folder.
+
+        Parameters
+        ----------
+        folder : str
+            Thematic folder name.
+        private : bool
+            If ``True``, inspect the private partition.
+
+        Returns
+        -------
+        list of int
+            Sorted list of level numbers (e.g. ``[0, 1, 2]``).
+        """
+        folder_dir = self._get_root(private) / folder
+        if not folder_dir.exists():
+            return []
+        levels = []
+        for d in folder_dir.iterdir():
+            m = _LEVEL_RE.match(d.name)
+            if m and d.is_dir():
+                levels.append(int(m.group(1)))
+        return sorted(levels)
+
+    # ------------------------------------------------------------------ #
+    # Public API — file operations                                      #
+    # ------------------------------------------------------------------ #
+
+    def read_file(self, folder: str, level: int, name: str, private: bool = False) -> str:
         """Read a memory file and return its content.
 
         Parameters
         ----------
-        layer : str
-            Layer that contains the file.
+        folder : str
+            Thematic folder name.
+        level : int
+            Consciousness level.
         name : str
             File name, with or without ``.md`` extension.
-        folder : str or None
-            Thematic folder. If provided, reads from
-            ``<memory_dir>/<folder>/<layer>/<name>.md``.
+        private : bool
+            If ``True``, read from the private partition.
 
         Returns
         -------
@@ -142,32 +225,38 @@ class MemoryStore:
         ------
         FileNotFoundError
             If the file does not exist.
-        ValueError
-            If ``layer`` is unknown.
+        RuntimeError
+            If ``private=True`` and the partition is not mounted.
         """
-        path = self._resolve_file(layer, name, folder)
+        path = self._resolve_file(folder, level, name, private)
         if not path.exists():
             raise FileNotFoundError(f"Memory file not found: {path}")
         return path.read_text(encoding="utf-8")
 
     def write_file(
-        self, layer: str, name: str, content: str, folder: str | None = None
+        self,
+        folder: str,
+        level: int,
+        name: str,
+        content: str,
+        private: bool = False,
     ) -> Path:
         """Write (create or overwrite) a memory file.
 
-        Creates intermediate directories as needed.
+        Creates intermediate directories (including ``level_N/``) as needed.
 
         Parameters
         ----------
-        layer : str
-            Target layer.
+        folder : str
+            Thematic folder name.
+        level : int
+            Consciousness level.
         name : str
             File name, with or without ``.md`` extension.
         content : str
             UTF-8 markdown content to write.
-        folder : str or None
-            Thematic folder. If provided, writes to
-            ``<memory_dir>/<folder>/<layer>/<name>.md``.
+        private : bool
+            If ``True``, write to the private partition.
 
         Returns
         -------
@@ -176,67 +265,86 @@ class MemoryStore:
 
         Raises
         ------
-        ValueError
-            If ``layer`` is unknown.
+        RuntimeError
+            If ``private=True`` and the partition is not mounted.
         """
-        path = self._resolve_file(layer, name, folder)
+        path = self._resolve_file(folder, level, name, private)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
         return path
 
     def list_files(
-        self, layer: str | None = None, folder: str | None = None
+        self,
+        folder: str | None = None,
+        level: int | None = None,
+        private: bool = False,
     ) -> list[dict]:
-        """List memory files, optionally filtered by layer and/or folder.
+        """List memory files, optionally filtered by folder and/or level.
 
         Parameters
         ----------
-        layer : str or None
-            If provided, list only files in that layer.
-            If ``None``, list files across all layers.
         folder : str or None
-            If provided, list only files inside that thematic folder.
-            If ``None``, list flat files in the legacy layer directories.
+            If provided, restrict to that thematic folder.
+            If ``None``, list files across all folders.
+        level : int or None
+            If provided, restrict to that consciousness level.
+            If ``None``, list all levels.
+        private : bool
+            If ``True``, list files in the private partition.
 
         Returns
         -------
         list of dict
-            Each entry has keys ``layer`` (str), ``name`` (str),
-            ``size_bytes`` (int), and optionally ``folder`` (str).
-
-        Raises
-        ------
-        ValueError
-            If ``layer`` is provided and unknown.
+            Each entry has keys ``folder`` (str), ``level`` (int),
+            ``name`` (str), ``size_bytes`` (int).
         """
-        layers = [layer] if layer else list(self._layers)
+        root = self._get_root(private)
+        folders = (
+            [folder]
+            if folder
+            else [
+                d.name
+                for d in sorted(root.iterdir())
+                if d.is_dir()
+                and any(_LEVEL_RE.match(s.name) for s in d.iterdir() if s.is_dir())
+            ]
+        )
         result = []
-        for lyr in layers:
-            dir_path = self._layer_dir(lyr, folder)
-            if not dir_path.exists():
+        for fld in folders:
+            folder_dir = root / fld
+            if not folder_dir.exists():
                 continue
-            for path in sorted(dir_path.glob(f"*{_MD_SUFFIX}")):
-                entry: dict = {
-                    "layer": lyr,
-                    "name": path.name,
-                    "size_bytes": path.stat().st_size,
-                }
-                if folder:
-                    entry["folder"] = folder
-                result.append(entry)
+            for sub in sorted(folder_dir.iterdir()):
+                m = _LEVEL_RE.match(sub.name)
+                if not m or not sub.is_dir():
+                    continue
+                lvl = int(m.group(1))
+                if level is not None and lvl != level:
+                    continue
+                for path in sorted(sub.glob(f"*{_MD_SUFFIX}")):
+                    result.append({
+                        "folder": fld,
+                        "level": lvl,
+                        "name": path.name,
+                        "size_bytes": path.stat().st_size,
+                    })
         return result
 
-    def delete_file(self, layer: str, name: str, folder: str | None = None) -> str:
+    def delete_file(
+        self, folder: str, level: int, name: str, private: bool = False
+    ) -> str:
         """Delete a memory file permanently.
 
         Parameters
         ----------
-        layer : str
-            Layer that contains the file.
+        folder : str
+            Thematic folder name.
+        level : int
+            Consciousness level.
         name : str
             File name, with or without ``.md`` extension.
-        folder : str or None
-            Thematic folder, if the file lives in one.
+        private : bool
+            If ``True``, delete from the private partition.
 
         Returns
         -------
@@ -247,10 +355,10 @@ class MemoryStore:
         ------
         FileNotFoundError
             If the file does not exist.
-        ValueError
-            If ``layer`` is unknown.
+        RuntimeError
+            If ``private=True`` and the partition is not mounted.
         """
-        path = self._resolve_file(layer, name, folder)
+        path = self._resolve_file(folder, level, name, private)
         if not path.exists():
             raise FileNotFoundError(f"Memory file not found: {path}")
         path.unlink()
@@ -258,29 +366,35 @@ class MemoryStore:
 
     def move_file(
         self,
-        source_layer: str,
+        src_folder: str,
+        src_level: int,
         name: str,
-        target_layer: str,
-        source_folder: str | None = None,
-        target_folder: str | None = None,
+        tgt_folder: str,
+        tgt_level: int,
+        src_private: bool = False,
+        tgt_private: bool = False,
     ) -> dict:
-        """Move a memory file between layers and/or folders.
+        """Move a memory file between folders, levels, or partitions.
 
         If a file with the same name already exists at the destination it
-        is overwritten.
+        is overwritten.  Can move between public and private partitions.
 
         Parameters
         ----------
-        source_layer : str
-            Current layer of the file.
+        src_folder : str
+            Source thematic folder.
+        src_level : int
+            Source consciousness level.
         name : str
             File name, with or without ``.md`` extension.
-        target_layer : str
-            Destination layer.
-        source_folder : str or None
-            Thematic folder of the source file, if any.
-        target_folder : str or None
-            Thematic folder of the destination, if any.
+        tgt_folder : str
+            Destination thematic folder.
+        tgt_level : int
+            Destination consciousness level.
+        src_private : bool
+            If ``True``, source is in the private partition.
+        tgt_private : bool
+            If ``True``, destination is in the private partition.
 
         Returns
         -------
@@ -291,122 +405,50 @@ class MemoryStore:
         ------
         FileNotFoundError
             If the source file does not exist.
-        ValueError
-            If either layer is unknown.
+        RuntimeError
+            If a required partition is not mounted.
         """
-        src = self._resolve_file(source_layer, name, source_folder)
+        src = self._resolve_file(src_folder, src_level, name, src_private)
         if not src.exists():
             raise FileNotFoundError(f"Memory file not found: {src}")
-        dst = self._resolve_file(target_layer, name, target_folder)
+        dst = self._resolve_file(tgt_folder, tgt_level, name, tgt_private)
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(src), str(dst))
         return {"source": str(src), "destination": str(dst)}
 
-    # ------------------------------------------------------------------ #
-    # Public API — folder management                                     #
-    # ------------------------------------------------------------------ #
-
-    def create_folder(self, folder: str) -> dict:
-        """Create a new thematic folder with sub-directories for all layers.
-
-        Creates ``<memory_dir>/<folder>/vital/``,
-        ``<memory_dir>/<folder>/contextual/``, and
-        ``<memory_dir>/<folder>/long/``.
-
-        Parameters
-        ----------
-        folder : str
-            Name of the thematic folder to create (e.g. ``"identite"``).
-
-        Returns
-        -------
-        dict
-            Mapping of layer → absolute path (str) for each created directory.
-
-        Raises
-        ------
-        ValueError
-            If the folder already exists in all layers.
-        """
-        folder_root = self._root / folder
-        created = {}
-        already_exists = True
-        for layer in self._layers:
-            layer_dir = folder_root / layer
-            if not layer_dir.exists():
-                already_exists = False
-            layer_dir.mkdir(parents=True, exist_ok=True)
-            created[layer] = str(layer_dir)
-        if already_exists:
-            raise ValueError(f"Folder '{folder}' already exists in all layers.")
-        return created
-
-    def list_by_circle(self, folder: str, circle: int) -> list[dict]:
-        """List files in a thematic folder at a given circle level.
-
-        Circle 0 → ``vital``, Circle 1 → ``contextual``, Circle 2 → ``long``.
-
-        Parameters
-        ----------
-        folder : str
-            Thematic folder name.
-        circle : int
-            Circle depth (0, 1, or 2).
-
-        Returns
-        -------
-        list of dict
-            Each entry has keys ``layer``, ``folder``, ``name``,
-            ``size_bytes``.
-
-        Raises
-        ------
-        ValueError
-            If ``circle`` is not in [0, 1, 2].
-        """
-        if circle not in _CIRCLE_TO_LAYER:
-            raise ValueError(
-                f"Invalid circle '{circle}'. Valid values: {list(_CIRCLE_TO_LAYER)}"
-            )
-        layer = _CIRCLE_TO_LAYER[circle]
-        return self.list_files(layer=layer, folder=folder)
-
-    def summarize_folder(self, folder: str, circle: int | None = None) -> list[dict]:
-        """Return file metadata for a thematic folder without exposing content.
+    def summarize_folder(
+        self,
+        folder: str,
+        level: int | None = None,
+        private: bool = False,
+    ) -> list[dict]:
+        """Return file metadata without exposing full content.
 
         Returns name, size, and first non-empty line of each file so that
-        the calling instance can generate a description without reading the
-        full content.
+        the calling instance can generate a description without reading
+        the full content.
 
         Parameters
         ----------
         folder : str
             Thematic folder name.
-        circle : int or None
-            If provided, restrict to that circle level (0, 1, or 2).
-            If ``None``, include all circles.
+        level : int or None
+            If provided, restrict to that consciousness level.
+        private : bool
+            If ``True``, inspect the private partition.
 
         Returns
         -------
         list of dict
-            Each entry has keys ``layer``, ``folder``, ``name``,
+            Each entry has keys ``folder``, ``level``, ``name``,
             ``size_bytes``, ``first_line``.
-
-        Raises
-        ------
-        ValueError
-            If ``circle`` is provided and not in [0, 1, 2].
         """
-        if circle is not None:
-            entries = self.list_by_circle(folder, circle)
-        else:
-            entries = []
-            for lyr in self._layers:
-                entries.extend(self.list_files(layer=lyr, folder=folder))
-
+        entries = self.list_files(folder=folder, level=level, private=private)
         result = []
         for entry in entries:
-            path = self._resolve_file(entry["layer"], entry["name"], folder)
+            path = self._resolve_file(
+                entry["folder"], entry["level"], entry["name"], private
+            )
             first_line = ""
             if path.exists():
                 for line in path.read_text(encoding="utf-8").splitlines():
@@ -418,15 +460,15 @@ class MemoryStore:
         return result
 
     # ------------------------------------------------------------------ #
-    # Public API — private partition                                     #
+    # Public API — private partition                                    #
     # ------------------------------------------------------------------ #
 
     def mount_private(self) -> str:
         """Mount the encrypted private partition.
 
-        Reads the passphrase from the local unversioned key file
-        (``memory/.private_key``). The mounted volume is accessible to
-        all other MCP tools once mounted.
+        Reads the passphrase from the local unversioned key file.
+        The mounted volume is accessible to all other store operations
+        via ``private=True``.
 
         Returns
         -------
@@ -459,7 +501,6 @@ class MemoryStore:
         )
         if result.returncode != 0:
             raise RuntimeError(f"hdiutil attach failed:\n{result.stderr.strip()}")
-        # Last line of stdout contains the mount point
         mount_point = result.stdout.strip().splitlines()[-1].split("\t")[-1].strip()
         return f"Mounted at: {mount_point}"
 
@@ -479,7 +520,7 @@ class MemoryStore:
             If hdiutil reports an error (e.g. volume not mounted).
         """
         result = subprocess.run(
-            ["hdiutil", "detach", "/Volumes/private"],
+            ["hdiutil", "detach", str(self._private_mount)],
             capture_output=True,
             text=True,
         )
