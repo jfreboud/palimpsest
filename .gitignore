@@ -3,6 +3,10 @@
 # Memory files (private Claude identity data)
 memory/
 
+# Encrypted private partition and key
+memory_private.dmg
+memory/.private_key
+
 # Virtual environment
 .venv/
 uv.lock

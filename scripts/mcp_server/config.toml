@@ -1,3 +1,5 @@
 [defaults]
-memory_dir = "../../memory"
-layers     = ["vital", "contextual", "long"]
+memory_dir  = "../../memory"
+layers      = ["vital", "contextual", "long"]
+dmg_path    = "../../memory_private.dmg"
+private_key = "../../memory/.private_key"
